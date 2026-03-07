@@ -25,7 +25,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, f1_score
 from sklearn.model_selection import train_test_split
 
-DATA_PATH = Path("assignments/data/spam.csv")
+DATA_PATH = Path(__file__).resolve().parent / "spam.csv"
 
 STOP_WORDS: frozenset[str] = frozenset(
     "a an the is are was were be been being have has had do does did "
@@ -53,6 +53,7 @@ def load_dataset(path: Path) -> tuple[list[str], list[int]]:
     return texts, labels
 
 
+
 # ---------------------------------------------------------------------------
 # Step 2 - Preprocessing
 # ---------------------------------------------------------------------------
@@ -68,15 +69,21 @@ def preprocess(text: str, remove_stopwords: bool = True) -> list[str]:
     5. Filter single-character tokens.
     """
     # TODO: lowercase text
+    text = text.lower()
 
     # TODO: remove punctuation and digits
+    text = re.sub(r"[^a-z\s]", " ", text)
     
     # TODO: split into tokens
-    tokens: list[str] = []
+    tokens: list[str] = text.split()
 
     # TODO: if remove_stopwords is True, remove tokens from STOP_WORDS
-    
+    if remove_stopwords:
+        tokens = [t for t in tokens if t not in STOP_WORDS]
+
     # TODO: remove single-character tokens
+    tokens = [t for t in tokens if len(t) > 1]
+
     return tokens
 
 
@@ -94,8 +101,16 @@ def build_vocabulary(corpus: list[str], max_vocab: int = 3000) -> dict[str, int]
     4. Return {token: index} ordered by descending frequency.
     """
     # TODO: create a vocabulary
-    
-    return {}
+    freq: Counter = Counter()
+    for doc in corpus:
+        tokens = preprocess(doc)
+        freq.update(tokens)
+
+    # Keep the top max_vocab tokens
+    most_common = freq.most_common(max_vocab)
+    vocab = {token: i for i, (token, _) in enumerate(most_common)}
+
+    return vocab
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +130,12 @@ def count_vectorize(texts: list[str], vocab: dict[str, int]) -> np.ndarray:
     # TODO: for each document:
     # - preprocess document
     # - increment matrix[i, vocab[token]] for each token found in vocab
+
+    for i, doc in enumerate(texts):
+        tokens = preprocess(doc)
+        for token in tokens:
+            if token in vocab:
+                matrix[i, vocab[token]] += 1
 
     return matrix
 
@@ -136,10 +157,16 @@ def compute_idf(corpus_tokens: list[list[str]], vocab: dict[str, int]) -> np.nda
 
     # TODO: compute document frequency per token
     # Hint: use set(tokens) so each token counts once per document
+    for tokens in corpus_tokens:
+        unique_tokens = set(tokens)
+        for token in unique_tokens:
+            if token in vocab:
+                df[vocab[token]] += 1
 
     # TODO: compute and return smoothed IDF vector
+    idf = np.log((1 + n_docs) / (1 + df)) + 1
+    return idf
     
-    pass
 
 
 def tfidf_vectorize(
@@ -161,8 +188,19 @@ def tfidf_vectorize(
     vocab_size = len(vocab)
     matrix = np.zeros((n_docs, vocab_size), dtype=np.float64)
 
-    pass
+    for i, doc in enumerate(texts):
+        tokens = preprocess(doc)
+        if not tokens:
+            continue  # avoid division by zero for empty documents
+        token_counts = Counter(tokens)
+        doc_length = len(tokens)
+        for token, count in token_counts.items():
+            if token in vocab:
+                tf = count / doc_length
+                matrix[i, vocab[token]] = tf * idf[vocab[token]]
 
+    return matrix
+      
 
 # ---------------------------------------------------------------------------
 # Step 6 - Custom hand-crafted features
@@ -193,7 +231,48 @@ def extract_custom_features(text: str) -> list[float]:
     # TODO: compute all 9 features and return as list[float]
     # Tip: protect against division by zero for empty text/tokens.
     
-    pass
+    # 1. Message length
+    msg_len = float(len(text))
+
+    # 2. Number of tokens (raw split)
+    raw_tokens = text.split()
+    num_tokens = float(len(raw_tokens))
+
+    # 3. Number of digits
+    num_digits = float(sum(c.isdigit() for c in text))
+
+    # 4. Number of uppercase characters
+    num_upper = float(sum(c.isupper() for c in text))
+
+    # 5. Uppercase character ratio (guard against empty text)
+    alpha_chars = sum(c.isalpha() for c in text)
+    upper_ratio = num_upper / alpha_chars if alpha_chars > 0 else 0.0
+
+    # 6. Number of punctuation marks: !, ?, .
+    num_punct = float(text.count("!") + text.count("?") + text.count("."))
+
+    # 7. Number of currency symbols
+    currency_pattern = r"[$£€]|GBP|EUR|USD"
+    num_currency = float(len(re.findall(currency_pattern, text)))
+
+    # 8. Count of spam-indicator words
+    lower_tokens = text.lower().split()
+    num_spam_words = float(sum(1 for t in lower_tokens if t in _SPAM_WORDS))
+
+    # 9. Type-token ratio (guard against zero tokens)
+    ttr = len(set(lower_tokens)) / len(lower_tokens) if lower_tokens else 0.0
+
+    return [
+        msg_len,
+        num_tokens,
+        num_digits,
+        num_upper,
+        upper_ratio,
+        num_punct,
+        num_currency,
+        num_spam_words,
+        ttr,
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +292,18 @@ def evaluate(
     # TODO: compute macro F1
     # TODO: print section header and classification_report
     
+    clf = LogisticRegression(max_iter=1000, random_state=42)
+    clf.fit(X_train, y_train)
+
+    y_pred = clf.predict(X_test)
+
+    macro_f1 = f1_score(y_test, y_pred, average="macro")
+
+    print(f"\n{'='*60}")
+    print(f"  {label}  |  Macro F1: {macro_f1:.4f}")
+    print(f"{'='*60}")
+    print(classification_report(y_test, y_pred, target_names=["ham", "spam"]))
+
 
 
 # ---------------------------------------------------------------------------
@@ -234,24 +325,61 @@ def main() -> None:
     # TODO: build vocabulary from X_train_raw only (avoid leakage)
     vocab: dict[str, int] = {}
 
+    vocab: dict[str, int] = build_vocabulary(X_train_raw, max_vocab=3000)
+    print(f"  Vocabulary size: {len(vocab)}")
+
     # --- Bag-of-Words ---
     # TODO: vectorize train/test with count_vectorize and evaluate
+
+    X_train_bow = count_vectorize(X_train_raw, vocab)
+    X_test_bow = count_vectorize(X_test_raw, vocab)
+    evaluate(X_train_bow, X_test_bow, y_train, y_test, "Bag-of-Words (Count Vectorizer)")
 
     # --- TF-IDF ---
     # TODO: preprocess X_train_raw -> tokens
     # TODO: compute idf on training tokens only
     # TODO: vectorize train/test with tfidf_vectorize and evaluate
 
+    # Preprocess training corpus tokens (for IDF computation on training data only)
+    train_tokens = [preprocess(doc) for doc in X_train_raw]
+    idf = compute_idf(train_tokens, vocab)
+    X_train_tfidf = tfidf_vectorize(X_train_raw, vocab, idf)
+    X_test_tfidf = tfidf_vectorize(X_test_raw, vocab, idf)
+    evaluate(X_train_tfidf, X_test_tfidf, y_train, y_test, "TF-IDF")
+
+
     # --- Custom features ---
     # TODO: build numpy feature matrices from extract_custom_features
     # TODO: evaluate custom features
+
+    X_train_custom = np.array([extract_custom_features(t) for t in X_train_raw])
+    X_test_custom = np.array([extract_custom_features(t) for t in X_test_raw])
+    evaluate(X_train_custom, X_test_custom, y_train, y_test, "Custom Hand-crafted Features")
 
     # --- Custom approach (optional) ---
     # TODO: add your own representation idea and evaluate it 
     # (e.g., use scikit-learn tf-idf implementation and try to find the best hyperparameter values)
     # (run script using machine learning models)
 
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from scipy.sparse import hstack, csr_matrix
+
+    sklearn_tfidf = TfidfVectorizer(
+        max_features=5000,
+        ngram_range=(1, 2),   # unigrams + bigrams
+        sublinear_tf=True,    # log(1 + tf) scaling
+        min_df=2,
+        strip_accents="unicode",
+    )
+    X_train_sk = sklearn_tfidf.fit_transform(X_train_raw)
+    X_test_sk = sklearn_tfidf.transform(X_test_raw)
+
+    # Combine sklearn TF-IDF with hand-crafted features
+    X_train_combined = hstack([X_train_sk, csr_matrix(X_train_custom)])
+    X_test_combined = hstack([X_test_sk, csr_matrix(X_test_custom)])
+    evaluate(X_train_combined, X_test_combined, y_train, y_test,
+             "sklearn TF-IDF (bigrams, sublinear) + Custom Features")
+
 
 if __name__ == "__main__":
     main()
-
