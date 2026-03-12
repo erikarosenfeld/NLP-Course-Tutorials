@@ -92,7 +92,9 @@ def load_embeddings(model_name: str = "glove-wiki-gigaword-100") -> KeyedVectors
     KeyedVectors
     """
     # TODO: call api.load(model_name) and return the result
-    pass
+    
+    kv = api.load("glove-wiki-gigaword-100")
+    return kv
 
 
 # ===========================================================================
@@ -120,7 +122,14 @@ def cosine_similarity(u: np.ndarray, v: np.ndarray) -> float:
     float in [-1, 1]
     """
     # TODO: compute and return cosine similarity
-    pass
+    dot_product = np.dot(u, v)
+    norm_u = np.linalg.norm(u)
+    norm_v = np.linalg.norm(v)
+    
+    if norm_u == 0 or norm_v == 0:
+        return 0.0
+    
+    return float(dot_product / (norm_u * norm_v))
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +165,20 @@ def most_similar_words(
         raise KeyError(f"'{word}' not in vocabulary")
 
     # TODO: iterate kv.index_to_key, compute similarities, filter, sort
-    pass
+    
+    query_vec = kv[word]
+    similarities = []
+
+    for other_word in kv.index_to_key:
+        if other_word == word:
+            continue  # skip the query word itself
+        other_vec = kv[other_word]
+        sim = cosine_similarity(query_vec, other_vec)
+        similarities.append((other_word, sim))
+
+    # Sort by similarity in descending order and return top_n
+    similarities.sort(key=lambda x: x[1], reverse=True)
+    return similarities[:top_n]
 
 
 # ---------------------------------------------------------------------------
@@ -186,7 +208,18 @@ def average_query(words: list[str], kv: KeyedVectors) -> np.ndarray:
     np.ndarray  shape (kv.vector_size,)
     """
     # TODO: collect vectors for in-vocabulary words and return their mean
-    pass
+    
+    vectors = []
+
+    for word in words:
+        if word in kv:
+            vectors.append(kv[word])
+
+    if not vectors:
+        return np.zeros(kv.vector_size)
+    
+    return np.mean(vectors, axis=0)
+
 
 
 def most_similar_to_vector(
@@ -214,8 +247,19 @@ def most_similar_to_vector(
     """
     exclude = exclude or set()
     # TODO: iterate vocabulary, compute similarities, skip excluded words, sort
-    pass
+    
+    similarities = []
 
+    for word in kv.index_to_key:
+        if word in exclude:
+            continue  # skip excluded words
+        word_vec = kv[word]
+        sim = cosine_similarity(query_vec, word_vec)
+        similarities.append((word, sim))
+
+    # Sort by similarity in descending order and return top_n
+    similarities.sort(key=lambda x: x[1], reverse=True)
+    return similarities[:top_n]
 
 # ---------------------------------------------------------------------------
 # Extension 1b – Compare two embedding models  (optional)
@@ -267,8 +311,16 @@ def solve_analogy(
     # TODO: compute query vector  →  kv[word_b] - kv[word_a] + kv[word_c]
     query_vector: np.ndarray | None = None
 
+    query_vector = kv[word_b] - kv[word_a] + kv[word_c]
+
     # TODO: find top_n nearest words to query_vector (excluding the three inputs)
-    pass
+    return most_similar_to_vector(
+        query_vec=query_vector,
+        kv=kv,
+        exclude={word_a, word_b, word_c},
+        top_n=top_n
+    )
+
 
 
 # ---------------------------------------------------------------------------
@@ -320,10 +372,34 @@ def evaluate_analogies(
     #   - call solve_analogy(a, b, c, kv, top_n=1)
     #   - check whether expected == result[0][0]
     #   - collect into details list
-    # TODO: compute accuracy = correct_count / len(benchmark)
-    # TODO: return (accuracy, details)
-    pass
 
+    details = []
+    correct = 0
+
+    for a, b, c, expected in benchmark:
+
+        result = solve_analogy(a, b, c, kv, top_n=1)
+
+        predicted = result[0][0]
+        is_correct = predicted == expected
+
+        if is_correct:
+            correct += 1
+
+        details.append({
+            "analogy": f"{a}:{b}::{c}:?",
+            "expected": expected,
+            "predicted": predicted,
+            "correct": is_correct
+        })
+
+    # TODO: compute accuracy = correct_count / len(benchmark)
+
+    accuracy = correct / len(benchmark)
+
+    # TODO: return (accuracy, details)
+
+    return accuracy, details
 
 # ===========================================================================
 # TASK 3 — Visualising Embedding Space
@@ -391,8 +467,12 @@ def reduce_with_pca(
     np.ndarray  shape (n, n_components)
     """
     # TODO: apply PCA and return reduced matrix
-    pass
+    
+    from sklearn.decomposition import PCA
 
+    pca = PCA(n_components=n_components)
+
+    return pca.fit_transform(matrix)
 
 def reduce_with_tsne(
     matrix: np.ndarray,
@@ -423,7 +503,16 @@ def reduce_with_tsne(
     np.ndarray  shape (n, n_components)
     """
     # TODO: optionally reduce dims with PCA, then apply TSNE, return result
-    pass
+    
+    from sklearn.decomposition import PCA
+    from sklearn.manifold import TSNE   
+
+    if matrix.shape[1] > 50:
+        pca = PCA(n_components=50)
+        matrix = pca.fit_transform(matrix)
+
+    tsne = TSNE(n_components=n_components, perplexity=perplexity, random_state=random_state)
+    return tsne.fit_transform(matrix)
 
 
 def plot_embeddings(
@@ -453,7 +542,35 @@ def plot_embeddings(
     output_path  : Path
     """
     # TODO: build the scatter plot and save to output_path
-    pass
+    
+    import matplotlib.pyplot as plt
+
+    plt.figure(figsize=(10, 8))
+
+    groups = list(set(group_labels))
+    colors = plt.cm.tab10(range(len(groups)))
+
+    color_map = {g: colors[i] for i, g in enumerate(groups)}
+
+    for i, word in enumerate(words):
+
+        x, y = coords[i]
+        group = group_labels[i]
+
+        plt.scatter(x, y, color=color_map[group])
+        plt.text(x + 0.01, y + 0.01, word, fontsize=9)
+
+    for g in groups:
+        plt.scatter([], [], color=color_map[g], label=g)
+
+    plt.legend()
+    plt.title(title)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    plt.savefig(output_path, bbox_inches="tight")
+    plt.close()
+    print("Saving plot to:", output_path.resolve())
 
 
 # ===========================================================================
@@ -485,7 +602,19 @@ def embed_document(text: str, kv: KeyedVectors) -> np.ndarray:
     np.ndarray  shape (kv.vector_size,)
     """
     # TODO: collect in-vocab vectors, return mean (or zeros if none found)
-    pass
+    
+    tokens = simple_tokenize(text)
+
+    vectors = []
+
+    for token in tokens:
+        if token in kv:
+            vectors.append(kv[token])
+
+    if not vectors:
+        return np.zeros(kv.vector_size)
+
+    return np.mean(vectors, axis=0)
 
 
 # ---------------------------------------------------------------------------
@@ -501,9 +630,22 @@ def evaluate_embeddings(
 ) -> None:
     """Train LogisticRegression on embeddings and print a classification report."""
     # TODO: fit LogisticRegression(max_iter=1000, random_state=42)
+
+    model = LogisticRegression(max_iter=1000, random_state=42)
+
+    model.fit(X_train, y_train)
+
     # TODO: predict on X_test
+
+    preds = model.predict(X_test)
+
     # TODO: compute macro F1 and print section header + classification_report
-    pass
+    
+    f1 = f1_score(y_test, preds, average="macro")
+
+    print(f"\n--- {label} ---")
+    print(f"Macro F1: {f1:.4f}")
+    print(classification_report(y_test, preds))
 
 
 # ===========================================================================
@@ -567,8 +709,27 @@ def compute_gender_bias_score(
         return 0.0
 
     # TODO: compute mean cosine similarity to each gender pole
+
+    male_sims = []
+    female_sims = []
+
+    for w in male_words:
+        if w in kv:
+            male_sims.append(cosine_similarity(kv[word], kv[w]))
+
+    for w in female_words:
+        if w in kv:
+            female_sims.append(cosine_similarity(kv[word], kv[w]))
+
+    if not male_sims or not female_sims:
+        return 0.0
+
     # TODO: return male_sim - female_sim
-    pass
+    
+    male_sim = np.mean(male_sims)
+    female_sim = np.mean(female_sims)
+
+    return male_sim - female_sim
 
 
 def report_profession_bias(
@@ -593,8 +754,22 @@ def report_profession_bias(
     list[tuple[str, float]]  — (profession, bias_score) sorted descending
     """
     # TODO: call compute_gender_bias_score for each profession
+
+    scores = []
+
+    for prof in professions:
+
+        score = compute_gender_bias_score(
+            prof, kv, male_words, female_words
+        )
+
+        scores.append((prof, score))
+
     # TODO: sort by score descending and return
-    pass
+
+    scores.sort(key=lambda x: x[1], reverse=True)
+
+    return scores
 
 
 # ===========================================================================
@@ -618,19 +793,21 @@ def main() -> None:
     print("=" * 60)
 
     # 1a. Basic nearest neighbours
-    for query in ["king", "doctor", "bank", "python"]:
-        neighbours = most_similar_words(query, kv, top_n=5)
-        print(f"\nTop-5 neighbours of '{query}':")
+    for query in ["apple", "doctor", "bank", "python"]:
+        neighbours = most_similar_words(query, kv, top_n=10)
+        print(f"\nTop-10 neighbours of '{query}':")
         for word, sim in neighbours:
             print(f"  {word:<20s}  {sim:.4f}")
 
     # 1b. Polysemy — "bank"
     # The embedding for "bank" blends financial and river-bank senses.
     # Does averaging "river" + "bank" shift the neighbours toward the waterway sense?
+
+    # Answer: it does! The top neighbours of "bank" include finance-related words like "banks", "lender", and "credit", while the neighbours of avg("river", "bank") include water-related words like "rivers", "creek", and "stream". Curiously, the top-10 nearest neighbors of apple also relate to the brand and not the fruit. 
     print("\n--- Polysemy: 'bank' vs average(['river', 'bank']) ---")
     avg_vec = average_query(["river", "bank"], kv)
     river_bank_neighbours = most_similar_to_vector(
-        avg_vec, kv, exclude={"river", "bank"}, top_n=5
+        avg_vec, kv, exclude={"river", "bank"}, top_n=10
     )
     print("Top-5 neighbours of avg(['river', 'bank']):")
     for word, sim in river_bank_neighbours:
